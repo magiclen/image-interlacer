@@ -57,8 +57,8 @@ impl Config {
             "-i /path/to/folder                          # Check /path/to/folder and make images inside it interlaced",
             "-i /path/to/image  -o /path/to/image2       # Check /path/to/image and make it interlaced, and save it to /path/to/image2",
             "-i /path/to/folder -o /path/to/folder2      # Check /path/to/folder and make images inside it interlaced, and save them to /path/to/folder2",
-            "-i /path/to/folder -o /path/to/folder2 -f   # Check /path/to/folder and make images inside it interlaced, and save them to /path/to/folder2 without overwriting checks.",
-            "-i /path/to/folder --allow-gif -r           # Check /path/to/folder and make images inside it including GIF images interlaced and also remain their profiles.",
+            "-i /path/to/folder -o /path/to/folder2 -f   # Check /path/to/folder and make images inside it interlaced, and save them to /path/to/folder2 without overwriting checks",
+            "-i /path/to/folder --allow-gif -r           # Check /path/to/folder and make images inside it including GIF images interlaced and also remain their profiles",
         ];
 
         let matches = App::new(APP_NAME)
@@ -72,34 +72,34 @@ impl Config {
             )
             .arg(Arg::with_name("INPUT_PATH")
                 .required(true)
-                .help("Assigns an image or a directory for image interlacing. It should be a path of a file or a directory.")
+                .help("Assigns an image or a directory for image interlacing. It should be a path of a file or a directory")
                 .takes_value(true)
             )
             .arg(Arg::with_name("OUTPUT_PATH")
                 .required(false)
                 .long("output")
                 .short("o")
-                .help("Assigns a destination of your generated files. It should be a path of a directory or a file depending on your input path.")
+                .help("Assigns a destination of your generated files. It should be a path of a directory or a file depending on your input path")
                 .takes_value(true)
             )
             .arg(Arg::with_name("SINGLE_THREAD")
                 .long("single-thread")
                 .short("s")
-                .help("Uses only one thread.")
+                .help("Uses only one thread")
             )
             .arg(Arg::with_name("FORCE")
                 .long("force")
                 .short("f")
-                .help("Forces to overwrite files.")
+                .help("Forces to overwrite files")
             )
             .arg(Arg::with_name("ALLOW_GIF")
                 .long("allow-gif")
-                .help("Allows to do GIF interlacing.")
+                .help("Allows to do GIF interlacing")
             )
             .arg(Arg::with_name("REMAIN_PROFILE")
                 .long("remain-profile")
                 .short("r")
-                .help("Remains the profiles of all images.")
+                .help("Remains the profiles of all images")
             )
             .after_help("Enjoy it! https://magiclen.org")
             .get_matches();
