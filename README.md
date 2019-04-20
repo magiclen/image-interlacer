@@ -19,13 +19,13 @@ interlaced, and save them to /path/to/folder2
   image-interlacer -i /path/to/folder -o /path/to/folder2 -f   # Check /path/to/folder and make images inside it
 interlaced, and save them to /path/to/folder2 without overwriting checks.
   image-interlacer -i /path/to/folder --allow-gif -r           # Check /path/to/folder and make images inside it
-interlaced and also remain their profiles, including GIF images
+including GIF images interlaced and also remain their profiles.
 
 USAGE:
     image-interlacer [FLAGS] [OPTIONS] <INPUT_PATH>
 
 FLAGS:
-        --allow-gif         Allows to make gif interlacing.
+        --allow-gif         Allows to do GIF interlacing.
     -f, --force             Forces to overwrite files.
     -r, --remain-profile    Remains the profiles of all images.
     -s, --single-thread     Uses only one thread.
