@@ -53,12 +53,12 @@ impl Config {
         let arg0 = Path::new(&arg0).file_stem().unwrap().to_str().unwrap();
 
         let examples = vec![
-            "-i /path/to/image                           # Check /path/to/image and make it interlaced",
-            "-i /path/to/folder                          # Check /path/to/folder and make images inside it interlaced",
-            "-i /path/to/image  -o /path/to/image2       # Check /path/to/image and make it interlaced, and save it to /path/to/image2",
-            "-i /path/to/folder -o /path/to/folder2      # Check /path/to/folder and make images inside it interlaced, and save them to /path/to/folder2",
-            "-i /path/to/folder -o /path/to/folder2 -f   # Check /path/to/folder and make images inside it interlaced, and save them to /path/to/folder2 without overwriting checks",
-            "-i /path/to/folder --allow-gif -r           # Check /path/to/folder and make images inside it including GIF images interlaced and also remain their profiles",
+            "/path/to/image                           # Check /path/to/image and make it interlaced",
+            "/path/to/folder                          # Check /path/to/folder and make images inside it interlaced",
+            "/path/to/image  -o /path/to/image2       # Check /path/to/image and make it interlaced, and save it to /path/to/image2",
+            "/path/to/folder -o /path/to/folder2      # Check /path/to/folder and make images inside it interlaced, and save them to /path/to/folder2",
+            "/path/to/folder -o /path/to/folder2 -f   # Check /path/to/folder and make images inside it interlaced, and save them to /path/to/folder2 without overwriting checks",
+            "/path/to/folder --allow-gif -r           # Check /path/to/folder and make images inside it including GIF images interlaced and also remain their profiles",
         ];
 
         let matches = App::new(APP_NAME)
