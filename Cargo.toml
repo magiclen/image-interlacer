@@ -1,6 +1,6 @@
 [package]
 name = "image-interlacer"
-version = "0.1.2"
+version = "0.1.3"
 authors = ["Magic Len <len@magiclen.org>"]
 edition = "2018"
 repository = "https://github.com/magiclen/image-interlacer"
@@ -19,7 +19,7 @@ panic = "abort"
 
 [dependencies]
 clap = "2.33.0"
-image-convert = "0.5"
+image-convert = "0.6"
 num_cpus = "1.10.0"
 path-absolutize = "1.1.3"
 scanner-rust = "1.0.6"

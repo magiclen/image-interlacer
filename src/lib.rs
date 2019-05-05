@@ -217,7 +217,7 @@ pub fn run(config: Config) -> Result<i32, String> {
 
                 if let Err(err) = interlacing(config.allow_gif, config.remain_profile, config.force, &sc, &overwriting, image_path.as_path(), output_path.as_ref().map(|p| p.as_path())) {
                     eprintln!("{}", err);
-                    io::stderr().flush().is_ok();
+                    io::stderr().flush().map_err(|err| err.to_string())?;
                 }
             }
         } else {
@@ -246,7 +246,7 @@ pub fn run(config: Config) -> Result<i32, String> {
                 pool.execute(move || {
                     if let Err(err) = interlacing(allow_gif, remain_profile, force, &sc, &overwriting, image_path.as_path(), output_path.as_ref().map(|p| p.as_path())) {
                         eprintln!("{}", err);
-                        io::stderr().flush().is_ok();
+                        io::stderr().flush().unwrap();
                     }
                 });
             }
@@ -274,12 +274,12 @@ fn interlacing(allow_gif: bool, remain_profile: bool, force: bool, sc: &Arc<Mute
             };
 
             if allow_interlacing {
-                let mut output = Some(Vec::with_capacity(1));
+                let mut output = Some(None);
 
                 let input_identify = identify(&mut output, &input_image_resource).map_err(|err| err.to_string())?;
 
-                if let Some(mut magic_wand) = output {
-                    let magic_wand = &mut magic_wand[0];
+                if let Some(magic_wand) = output {
+                    let mut magic_wand = magic_wand.unwrap();
 
                     magic_wand.set_interlace_scheme(InterlaceType::LineInterlace.ordinal() as bindings::InterlaceType).map_err(|err| err.to_string())?;
 
