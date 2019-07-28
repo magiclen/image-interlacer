@@ -11,8 +11,9 @@ description= "It helps you interlace an image or multiple images for web-page us
 readme = "README.md"
 license = "MIT"
 
-[badges]
-travis-ci = { repository = "magiclen/image-interlacer", branch = "master" }
+[badges.travis-ci]
+repository = "magiclen/image-interlacer"
+branch = "master"
 
 [profile.release]
 panic = "abort"
