@@ -3,25 +3,25 @@
 
 extern crate clap;
 extern crate image_convert;
+extern crate num_cpus;
 extern crate path_absolutize;
+extern crate pathdiff;
 extern crate scanner_rust;
 extern crate starts_ends_with_caseless;
-extern crate walkdir;
-extern crate num_cpus;
 extern crate threadpool;
-extern crate pathdiff;
+extern crate walkdir;
 
 use std::env;
-use std::path::Path;
 use std::fs;
-use std::sync::{Mutex, Arc};
 use std::io::{self, Write};
+use std::path::Path;
+use std::sync::{Arc, Mutex};
 
 use clap::{App, Arg};
 
 use path_absolutize::*;
 
-use image_convert::{InterlaceType, ImageResource, ImageIdentify, identify, magick_rust::bindings};
+use image_convert::{identify, magick_rust::bindings, ImageIdentify, ImageResource, InterlaceType};
 
 use scanner_rust::Scanner;
 
@@ -139,7 +139,10 @@ pub fn run(config: Config) -> Result<i32, String> {
             let is_file = file_type.is_file();
 
             if !path.is_dir() && !is_file {
-                return Err(format!("`{}` is not an existing file or a directory.", path.to_string_lossy()));
+                return Err(format!(
+                    "`{}` is not an existing file or a directory.",
+                    path.to_string_lossy()
+                ));
             }
 
             (path, is_file)
@@ -160,23 +163,30 @@ pub fn run(config: Config) -> Result<i32, String> {
                     if !is_file {
                         return Err(format!("`{}` is not a file.", output_path.to_string_lossy()));
                     }
-                } else if file_type.is_dir() {
-                    if is_file {
-                        return Err(format!("`{}` is not a directory.", output_path.to_string_lossy()));
-                    }
+                } else if file_type.is_dir() && is_file {
+                    return Err(format!("`{}` is not a directory.", output_path.to_string_lossy()));
                 }
             }
 
             Some(output_path)
         }
-        None => None
+        None => None,
     };
 
-    let sc: Arc<Mutex<Scanner<io::Stdin>>> = Arc::new(Mutex::new(Scanner::scan_stream(io::stdin())));
+    let sc: Arc<Mutex<Scanner<io::Stdin>>> =
+        Arc::new(Mutex::new(Scanner::scan_stream(io::stdin())));
     let overwriting: Arc<Mutex<u8>> = Arc::new(Mutex::new(0));
 
     if is_file {
-        interlacing(config.allow_gif, config.remain_profile, config.force, &sc, &overwriting, &input_path, output_path.as_ref().map(|p| p.as_path()))?;
+        interlacing(
+            config.allow_gif,
+            config.remain_profile,
+            config.force,
+            &sc,
+            &overwriting,
+            &input_path,
+            output_path.as_ref().map(|p| p.as_path()),
+        )?;
     } else {
         let mut image_paths = Vec::new();
 
@@ -195,7 +205,7 @@ pub fn run(config: Config) -> Result<i32, String> {
                         allow_extensions.push("gif");
                     }
 
-                    if extension.starts_with_caseless_ascii_multiple(&allow_extensions) {
+                    if extension.starts_with_caseless_ascii_multiple(&allow_extensions).is_some() {
                         image_paths.push(p.canonicalize().unwrap());
                     }
                 }
@@ -212,10 +222,18 @@ pub fn run(config: Config) -> Result<i32, String> {
 
                         Some(output_path)
                     }
-                    None => None
+                    None => None,
                 };
 
-                if let Err(err) = interlacing(config.allow_gif, config.remain_profile, config.force, &sc, &overwriting, image_path.as_path(), output_path.as_ref().map(|p| p.as_path())) {
+                if let Err(err) = interlacing(
+                    config.allow_gif,
+                    config.remain_profile,
+                    config.force,
+                    &sc,
+                    &overwriting,
+                    image_path.as_path(),
+                    output_path.as_ref().map(|p| p.as_path()),
+                ) {
                     eprintln!("{}", err);
                     io::stderr().flush().map_err(|err| err.to_string())?;
                 }
@@ -237,14 +255,22 @@ pub fn run(config: Config) -> Result<i32, String> {
 
                         Some(output_path)
                     }
-                    None => None
+                    None => None,
                 };
 
                 let sc = sc.clone();
                 let overwriting = overwriting.clone();
 
                 pool.execute(move || {
-                    if let Err(err) = interlacing(allow_gif, remain_profile, force, &sc, &overwriting, image_path.as_path(), output_path.as_ref().map(|p| p.as_path())) {
+                    if let Err(err) = interlacing(
+                        allow_gif,
+                        remain_profile,
+                        force,
+                        &sc,
+                        &overwriting,
+                        image_path.as_path(),
+                        output_path.as_ref().map(|p| p.as_path()),
+                    ) {
                         eprintln!("{}", err);
                         io::stderr().flush().unwrap();
                     }
@@ -258,30 +284,44 @@ pub fn run(config: Config) -> Result<i32, String> {
     Ok(0)
 }
 
-fn interlacing(allow_gif: bool, remain_profile: bool, force: bool, sc: &Arc<Mutex<Scanner<io::Stdin>>>, overwriting: &Arc<Mutex<u8>>, input_path: &Path, output_path: Option<&Path>) -> Result<(), String> {
+fn interlacing(
+    allow_gif: bool,
+    remain_profile: bool,
+    force: bool,
+    sc: &Arc<Mutex<Scanner<io::Stdin>>>,
+    overwriting: &Arc<Mutex<u8>>,
+    input_path: &Path,
+    output_path: Option<&Path>,
+) -> Result<(), String> {
     let mut output = None;
 
     let input_image_resource = ImageResource::from_path(&input_path);
 
-    let input_identify: ImageIdentify = identify(&mut output, &input_image_resource).map_err(|err| err.to_string())?;
+    let input_identify: ImageIdentify =
+        identify(&mut output, &input_image_resource).map_err(|err| err.to_string())?;
 
     match input_identify.interlace {
         InterlaceType::NoInterlace | InterlaceType::UndefinedInterlace => {
             let allow_interlacing = match input_identify.format.as_str() {
                 "JPEG" | "PNG" => true,
                 "GIF" => allow_gif,
-                _ => false
+                _ => false,
             };
 
             if allow_interlacing {
                 let mut output = Some(None);
 
-                let input_identify = identify(&mut output, &input_image_resource).map_err(|err| err.to_string())?;
+                let input_identify =
+                    identify(&mut output, &input_image_resource).map_err(|err| err.to_string())?;
 
                 if let Some(magic_wand) = output {
                     let mut magic_wand = magic_wand.unwrap();
 
-                    magic_wand.set_interlace_scheme(InterlaceType::LineInterlace.ordinal() as bindings::InterlaceType).map_err(|err| err.to_string())?;
+                    magic_wand
+                        .set_interlace_scheme(
+                            InterlaceType::LineInterlace.ordinal() as bindings::InterlaceType
+                        )
+                        .map_err(|err| err.to_string())?;
 
                     if !remain_profile {
                         magic_wand.profile_image("*", None)?;
@@ -296,10 +336,20 @@ fn interlacing(allow_gif: bool, remain_profile: bool, force: bool, sc: &Arc<Mute
                                     let output_path_string = output_path.to_string_lossy();
 
                                     let allow_overwrite = loop {
-                                        print!("`{}` exists, do you want to overwrite it? [y/n] ", output_path_string);
-                                        io::stdout().flush().map_err(|_| "Cannot flush stdout.".to_string())?;
+                                        print!(
+                                            "`{}` exists, do you want to overwrite it? [y/n] ",
+                                            output_path_string
+                                        );
+                                        io::stdout()
+                                            .flush()
+                                            .map_err(|_| "Cannot flush stdout.".to_string())?;
 
-                                        let token = sc.lock().unwrap().next().map_err(|_| "Cannot read from stdin.".to_string())?.ok_or("Read EOF.".to_string())?;
+                                        let token = sc
+                                            .lock()
+                                            .unwrap()
+                                            .next()
+                                            .map_err(|_| "Cannot read from stdin.".to_string())?
+                                            .ok_or_else(|| "Read EOF.".to_string())?;
 
                                         if token.starts_with_caseless_ascii("y") {
                                             break true;
@@ -315,12 +365,13 @@ fn interlacing(allow_gif: bool, remain_profile: bool, force: bool, sc: &Arc<Mute
                                     }
                                 }
                             } else {
-                                fs::create_dir_all(output_path.parent().unwrap()).map_err(|err| err.to_string())?;
+                                fs::create_dir_all(output_path.parent().unwrap())
+                                    .map_err(|err| err.to_string())?;
                             }
 
                             output_path
                         }
-                        None => input_path
+                        None => input_path,
                     };
                     let temp = magic_wand.write_image_blob(input_identify.format.as_str())?;
 
