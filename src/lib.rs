@@ -10,6 +10,7 @@ extern crate scanner_rust;
 extern crate starts_ends_with_caseless;
 extern crate threadpool;
 extern crate walkdir;
+extern crate terminal_size;
 
 use std::env;
 use std::fs;
@@ -18,6 +19,7 @@ use std::path::Path;
 use std::sync::{Arc, Mutex};
 
 use clap::{App, Arg};
+use terminal_size::{terminal_size, Width};
 
 use path_absolutize::*;
 
@@ -61,7 +63,14 @@ impl Config {
             "/path/to/folder --allow-gif -r           # Check /path/to/folder and make images inside it including GIF images interlaced and also remain their profiles",
         ];
 
+        let terminal_width = if let Some((Width(width), _)) = terminal_size() {
+            width as usize
+        } else {
+            0
+        };
+
         let matches = App::new(APP_NAME)
+            .set_term_width(terminal_width)
             .version(CARGO_PKG_VERSION)
             .author(CARGO_PKG_AUTHORS)
             .about(format!("It helps you interlace an image or multiple images for web-page usage.\n\nEXAMPLES:\n{}", examples.iter()
