@@ -10,6 +10,7 @@ extern crate scanner_rust;
 
 extern crate num_cpus;
 extern crate threadpool;
+extern crate walkdir;
 
 extern crate image_convert;
 
@@ -27,6 +28,7 @@ use starts_ends_with_caseless::{StartsWithCaseless, StartsWithCaselessMultiple};
 use scanner_rust::generic_array::typenum::U8;
 use scanner_rust::Scanner;
 
+use walkdir::WalkDir;
 use threadpool::ThreadPool;
 
 const APP_NAME: &str = "Image Interlacer";
@@ -136,14 +138,12 @@ fn main() -> Result<(), String> {
     if is_dir {
         let mut image_paths = Vec::new();
 
-        for dir_entry in input_path.read_dir().map_err(|err| err.to_string())? {
-            let dir_entry = dir_entry.map_err(|err| err.to_string())?;
-
+        for dir_entry in WalkDir::new(&input_path).into_iter().filter_map(|e| e.ok()) {
             if !dir_entry.metadata().map_err(|err| err.to_string())?.is_file() {
                 continue;
             }
 
-            let p = dir_entry.path();
+            let p = dir_entry.into_path();
 
             if let Some(extension) = p.extension() {
                 if let Some(extension) = extension.to_str() {
