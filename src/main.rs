@@ -40,7 +40,7 @@ fn main() -> Result<(), String> {
         .set_term_width(terminal_size().map(|(width, _)| width.0 as usize).unwrap_or(0))
         .version(CARGO_PKG_VERSION)
         .author(CARGO_PKG_AUTHORS)
-        .about(concat!("It helps you generate favicons with different formats and sizes.\n\nEXAMPLES:\n", concat_line!(prefix "image-interlacer ",
+        .about(concat!("It helps you interlace an image or multiple images for web-page usage.\n\nEXAMPLES:\n", concat_line!(prefix "image-interlacer ",
                 "/path/to/image                           # Check /path/to/image and make it interlaced",
                 "/path/to/folder                          # Check /path/to/folder and make images inside it interlaced",
                 "/path/to/image  -o /path/to/image2       # Check /path/to/image and make it interlaced, and save it to /path/to/image2",
