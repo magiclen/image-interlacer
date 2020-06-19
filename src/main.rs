@@ -14,6 +14,7 @@ extern crate walkdir;
 
 extern crate image_convert;
 
+use std::error::Error;
 use std::fs;
 use std::io::{self, Write};
 use std::path::Path;
@@ -28,14 +29,14 @@ use starts_ends_with_caseless::{StartsWithCaseless, StartsWithCaselessMultiple};
 use scanner_rust::generic_array::typenum::U8;
 use scanner_rust::Scanner;
 
-use walkdir::WalkDir;
 use threadpool::ThreadPool;
+use walkdir::WalkDir;
 
 const APP_NAME: &str = "Image Interlacer";
 const CARGO_PKG_VERSION: &str = env!("CARGO_PKG_VERSION");
 const CARGO_PKG_AUTHORS: &str = env!("CARGO_PKG_AUTHORS");
 
-fn main() -> Result<(), String> {
+fn main() -> Result<(), Box<dyn Error>> {
     let matches = App::new(APP_NAME)
         .set_term_width(terminal_size().map(|(width, _)| width.0 as usize).unwrap_or(0))
         .version(CARGO_PKG_VERSION)
@@ -92,7 +93,7 @@ fn main() -> Result<(), String> {
 
     let input_path = Path::new(input);
 
-    let is_dir = input_path.metadata().map_err(|err| err.to_string())?.is_dir();
+    let is_dir = input_path.metadata()?.is_dir();
 
     let output_path = match output {
         Some(output) => {
@@ -106,15 +107,13 @@ fn main() -> Result<(), String> {
                         } else {
                             return Err(format!(
                                 "`{}` is not a directory.",
-                                output_path
-                                    .absolutize()
-                                    .map_err(|err| err.to_string())?
-                                    .to_string_lossy()
-                            ));
+                                output_path.absolutize()?.to_string_lossy()
+                            )
+                            .into());
                         }
                     }
                     Err(_) => {
-                        fs::create_dir_all(output_path).map_err(|err| err.to_string())?;
+                        fs::create_dir_all(output_path)?;
 
                         Some(output_path)
                     }
@@ -122,8 +121,9 @@ fn main() -> Result<(), String> {
             } else if output_path.is_dir() {
                 return Err(format!(
                     "`{}` is not a file.",
-                    output_path.absolutize().map_err(|err| err.to_string())?.to_string_lossy()
-                ));
+                    output_path.absolutize()?.to_string_lossy()
+                )
+                .into());
             } else {
                 Some(output_path)
             }
@@ -131,15 +131,14 @@ fn main() -> Result<(), String> {
         None => None,
     };
 
-    let sc: Arc<Mutex<Scanner<io::Stdin, U8>>> =
-        Arc::new(Mutex::new(Scanner::new2(io::stdin())));
+    let sc: Arc<Mutex<Scanner<io::Stdin, U8>>> = Arc::new(Mutex::new(Scanner::new2(io::stdin())));
     let overwriting: Arc<Mutex<u8>> = Arc::new(Mutex::new(0));
 
     if is_dir {
         let mut image_paths = Vec::new();
 
         for dir_entry in WalkDir::new(&input_path).into_iter().filter_map(|e| e.ok()) {
-            if !dir_entry.metadata().map_err(|err| err.to_string())?.is_file() {
+            if !dir_entry.metadata()?.is_file() {
                 continue;
             }
 
@@ -183,7 +182,7 @@ fn main() -> Result<(), String> {
                     output_path.as_deref(),
                 ) {
                     eprintln!("{}", err);
-                    io::stderr().flush().map_err(|err| err.to_string())?;
+                    io::stderr().flush()?;
                 }
             }
         } else {
@@ -238,13 +237,12 @@ fn interlacing(
     overwriting: &Arc<Mutex<u8>>,
     input_path: &Path,
     output_path: Option<&Path>,
-) -> Result<(), String> {
+) -> Result<(), Box<dyn Error>> {
     let mut output = None;
 
     let input_image_resource = image_convert::ImageResource::from_path(&input_path);
 
-    let input_identify = image_convert::identify(&mut output, &input_image_resource)
-        .map_err(|err| err.to_string())?;
+    let input_identify = image_convert::identify(&mut output, &input_image_resource)?;
 
     match input_identify.interlace {
         image_convert::InterlaceType::NoInterlace
@@ -258,19 +256,16 @@ fn interlacing(
             if allow_interlacing {
                 let mut output = Some(None);
 
-                let input_identify = image_convert::identify(&mut output, &input_image_resource)
-                    .map_err(|err| err.to_string())?;
+                let input_identify = image_convert::identify(&mut output, &input_image_resource)?;
 
                 match output {
                     Some(magic_wand) => {
                         let mut magic_wand = magic_wand.unwrap();
 
-                        magic_wand
-                            .set_interlace_scheme(
-                                image_convert::InterlaceType::LineInterlace.ordinal()
-                                    as image_convert::magick_rust::bindings::InterlaceType,
-                            )
-                            .map_err(|err| err.to_string())?;
+                        magic_wand.set_interlace_scheme(
+                            image_convert::InterlaceType::LineInterlace.ordinal()
+                                as image_convert::magick_rust::bindings::InterlaceType,
+                        )?;
 
                         if !remain_profile {
                             magic_wand.profile_image("*", None)?;
@@ -289,15 +284,12 @@ fn interlacing(
                                                 "`{}` exists, do you want to overwrite it? [y/n] ",
                                                 output_path_string
                                             );
-                                            io::stdout()
-                                                .flush()
-                                                .map_err(|_| "Cannot flush stdout.".to_string())?;
+                                            io::stdout().flush()?;
 
                                             let token = sc
                                                 .lock()
                                                 .unwrap()
-                                                .next()
-                                                .map_err(|_| "Cannot read from stdin.".to_string())?
+                                                .next()?
                                                 .ok_or_else(|| "Read EOF.".to_string())?;
 
                                             if token.starts_with_caseless_ascii("y") {
@@ -314,8 +306,7 @@ fn interlacing(
                                         }
                                     }
                                 } else {
-                                    fs::create_dir_all(output_path.parent().unwrap())
-                                        .map_err(|err| err.to_string())?;
+                                    fs::create_dir_all(output_path.parent().unwrap())?;
                                 }
 
                                 output_path
@@ -324,12 +315,12 @@ fn interlacing(
                         };
                         let temp = magic_wand.write_image_blob(input_identify.format.as_str())?;
 
-                        fs::write(&output_path, temp).map_err(|err| err.to_string())?;
+                        fs::write(&output_path, temp)?;
 
                         let mutex_guard = overwriting.lock().unwrap();
 
                         println!("`{}` has been interlaced.", output_path.to_string_lossy());
-                        io::stdout().flush().map_err(|_| "Cannot flush stdout.".to_string())?;
+                        io::stdout().flush()?;
 
                         drop(mutex_guard);
                     }
