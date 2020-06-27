@@ -10,6 +10,7 @@ categories = ["command-line-utilities"]
 description= "It helps you interlace an image or multiple images for web-page usage."
 readme = "README.md"
 license = "MIT"
+include = ["src/**/*", "Cargo.toml"]
 
 [badges.travis-ci]
 repository = "magiclen/image-interlacer"
