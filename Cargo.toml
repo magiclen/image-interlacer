@@ -1,22 +1,24 @@
 [package]
 name = "image-interlacer"
-version = "0.1.11"
+version = "0.1.12"
 authors = ["Magic Len <len@magiclen.org>"]
 edition = "2018"
 repository = "https://github.com/magiclen/image-interlacer"
 homepage = "https://magiclen.org/image-interlacer"
 keywords = ["image", "interlacing", "gif", "jpeg", "png"]
 categories = ["command-line-utilities"]
-description= "It helps you interlace an image or multiple images for web-page usage."
+description = "It helps you interlace an image or multiple images for web-page usage."
 readme = "README.md"
 license = "MIT"
-include = ["src/**/*", "Cargo.toml"]
+include = ["src/**/*", "Cargo.toml", "README.md", "Cargo.toml"]
 
 [badges.travis-ci]
 repository = "magiclen/image-interlacer"
 branch = "master"
 
 [profile.release]
+lto = true
+codegen-units = 1
 panic = "abort"
 
 [dependencies]
