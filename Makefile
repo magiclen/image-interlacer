@@ -10,7 +10,7 @@ all: ./target/release/image-interlacer
 install:
 	$(MAKE)
 	sudo cp ./target/release/image-interlacer /usr/local/bin/image-interlacer
-	sudo chown root. /usr/local/bin/image-interlacer
+	sudo chown root: /usr/local/bin/image-interlacer
 	sudo chmod 0755 /usr/local/bin/image-interlacer
 	
 test:
