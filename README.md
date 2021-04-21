@@ -1,7 +1,7 @@
 Image Interlacer
 ====================
 
-[![Build Status](https://travis-ci.org/magiclen/image-interlacer.svg?branch=master)](https://travis-ci.org/magiclen/image-interlacer)
+[![CI](https://github.com/magiclen/image-interlacer/actions/workflows/ci.yml/badge.svg)](https://github.com/magiclen/image-interlacer/actions/workflows/ci.yml)
 
 It helps you interlace an image or multiple images for web-page usage.
 
