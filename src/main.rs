@@ -226,7 +226,7 @@ fn main() -> Result<(), Box<dyn Error>> {
             pool.join();
         }
     } else {
-        interlacing(allow_gif, remain_profile, force, &sc, &overwriting, &input_path, output_path)?;
+        interlacing(allow_gif, remain_profile, force, &sc, &overwriting, input_path, output_path)?;
     }
 
     Ok(())
