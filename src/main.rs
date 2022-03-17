@@ -1,27 +1,13 @@
-#[macro_use]
-extern crate concat_with;
-extern crate clap;
-extern crate terminal_size;
-
-extern crate path_absolutize;
-extern crate str_utils;
-
-extern crate scanner_rust;
-
-extern crate num_cpus;
-extern crate threadpool;
-extern crate walkdir;
-
-extern crate image_convert;
-
 use std::error::Error;
 use std::fs;
 use std::io::{self, Write};
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 
-use clap::{App, Arg};
+use clap::{Arg, Command};
 use terminal_size::terminal_size;
+
+use concat_with::concat_line;
 
 use path_absolutize::Absolutize;
 use str_utils::{EqIgnoreAsciiCaseMultiple, StartsWithIgnoreAsciiCase};
@@ -37,8 +23,8 @@ const CARGO_PKG_VERSION: &str = env!("CARGO_PKG_VERSION");
 const CARGO_PKG_AUTHORS: &str = env!("CARGO_PKG_AUTHORS");
 
 fn main() -> Result<(), Box<dyn Error>> {
-    let matches = App::new(APP_NAME)
-        .set_term_width(terminal_size().map(|(width, _)| width.0 as usize).unwrap_or(0))
+    let matches = Command::new(APP_NAME)
+        .term_width(terminal_size().map(|(width, _)| width.0 as usize).unwrap_or(0))
         .version(CARGO_PKG_VERSION)
         .author(CARGO_PKG_AUTHORS)
         .about(concat!("It helps you interlace an image or multiple images for web-page usage.\n\nEXAMPLES:\n", concat_line!(prefix "image-interlacer ",
@@ -49,36 +35,36 @@ fn main() -> Result<(), Box<dyn Error>> {
                 "/path/to/folder -o /path/to/folder2 -f   # Check /path/to/folder and make images inside it interlaced, and save them to /path/to/folder2 without overwriting checks",
                 "/path/to/folder --allow-gif -r           # Check /path/to/folder and make images inside it including GIF images interlaced and also remain their profiles",
             )))
-        .arg(Arg::with_name("INPUT_PATH")
+        .arg(Arg::new("INPUT_PATH")
             .required(true)
-            .help("Assigns an image or a directory for image interlacing. It should be a path of a file or a directory")
+            .help("Assign an image or a directory for image interlacing. It should be a path of a file or a directory")
             .takes_value(true)
         )
-        .arg(Arg::with_name("OUTPUT_PATH")
+        .arg(Arg::new("OUTPUT_PATH")
             .required(false)
             .long("output")
-            .short("o")
-            .help("Assigns a destination of your generated files. It should be a path of a directory or a file depending on your input path")
+            .short('o')
+            .help("Assign a destination of your generated files. It should be a path of a directory or a file depending on your input path")
             .takes_value(true)
         )
-        .arg(Arg::with_name("SINGLE_THREAD")
+        .arg(Arg::new("SINGLE_THREAD")
             .long("single-thread")
-            .short("s")
-            .help("Uses only one thread")
+            .short('s')
+            .help("Use only one thread")
         )
-        .arg(Arg::with_name("FORCE")
+        .arg(Arg::new("FORCE")
             .long("force")
-            .short("f")
-            .help("Forces to overwrite files")
+            .short('f')
+            .help("Force to overwrite files")
         )
-        .arg(Arg::with_name("ALLOW_GIF")
+        .arg(Arg::new("ALLOW_GIF")
             .long("allow-gif")
-            .help("Allows to do GIF interlacing")
+            .help("Allow to do GIF interlacing")
         )
-        .arg(Arg::with_name("REMAIN_PROFILE")
+        .arg(Arg::new("REMAIN_PROFILE")
             .long("remain-profile")
-            .short("r")
-            .help("Remains the profiles of all images")
+            .short('r')
+            .help("Remain the profiles of all images")
         )
         .after_help("Enjoy it! https://magiclen.org")
         .get_matches();
