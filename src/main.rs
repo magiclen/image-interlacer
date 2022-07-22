@@ -227,11 +227,9 @@ fn interlacing(
     input_path: &Path,
     output_path: Option<&Path>,
 ) -> Result<(), Box<dyn Error>> {
-    let mut output = None;
-
     let input_image_resource = image_convert::ImageResource::from_path(&input_path);
 
-    let input_identify = image_convert::identify(&mut output, &input_image_resource)?;
+    let input_identify = image_convert::identify_ping(&input_image_resource)?;
 
     match input_identify.interlace {
         image_convert::InterlaceType::NoInterlace
@@ -243,14 +241,13 @@ fn interlacing(
             };
 
             if allow_interlacing {
-                let mut output = Some(None);
+                let mut output = None;
 
-                let input_identify = image_convert::identify(&mut output, &input_image_resource)?;
+                let input_identify =
+                    image_convert::identify_read(&mut output, &input_image_resource)?;
 
                 match output {
-                    Some(magic_wand) => {
-                        let mut magic_wand = magic_wand.unwrap();
-
+                    Some(mut magic_wand) => {
                         magic_wand.set_interlace_scheme(
                             image_convert::InterlaceType::LineInterlace.ordinal()
                                 as image_convert::magick_rust::bindings::InterlaceType,
