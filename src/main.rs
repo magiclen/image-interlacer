@@ -123,7 +123,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     if is_dir {
         let mut image_paths = Vec::new();
 
-        for dir_entry in WalkDir::new(&input_path).into_iter().filter_map(|e| e.ok()) {
+        for dir_entry in WalkDir::new(input_path).into_iter().filter_map(|e| e.ok()) {
             if !dir_entry.metadata()?.is_file() {
                 continue;
             }
@@ -152,9 +152,9 @@ fn main() -> Result<(), Box<dyn Error>> {
             for image_path in image_paths {
                 let output_path = match output_path.as_ref() {
                     Some(output_path) => {
-                        let p = pathdiff::diff_paths(&image_path, &input_path).unwrap();
+                        let p = pathdiff::diff_paths(&image_path, input_path).unwrap();
 
-                        let output_path = output_path.join(&p);
+                        let output_path = output_path.join(p);
 
                         Some(output_path)
                     }
@@ -184,9 +184,9 @@ fn main() -> Result<(), Box<dyn Error>> {
                 let overwriting = overwriting.clone();
                 let output_path = match output_path.as_ref() {
                     Some(output_path) => {
-                        let p = pathdiff::diff_paths(&image_path, &input_path).unwrap();
+                        let p = pathdiff::diff_paths(&image_path, input_path).unwrap();
 
-                        let output_path = output_path.join(&p);
+                        let output_path = output_path.join(p);
 
                         Some(output_path)
                     }
@@ -227,7 +227,7 @@ fn interlacing(
     input_path: &Path,
     output_path: Option<&Path>,
 ) -> Result<(), Box<dyn Error>> {
-    let input_image_resource = image_convert::ImageResource::from_path(&input_path);
+    let input_image_resource = image_convert::ImageResource::from_path(input_path);
 
     let input_identify = image_convert::identify_ping(&input_image_resource)?;
 
@@ -304,7 +304,7 @@ fn interlacing(
 
                         let temp = magic_wand.write_image_blob(input_identify.format.as_str())?;
 
-                        fs::write(&output_path, temp)?;
+                        fs::write(output_path, temp)?;
 
                         let mutex_guard = overwriting.lock().unwrap();
 
