@@ -1,20 +1,17 @@
-use std::error::Error;
-use std::fs;
-use std::io::{self, Write};
-use std::path::Path;
-use std::sync::{Arc, Mutex};
+use std::{
+    error::Error,
+    fs,
+    io::{self, Write},
+    path::Path,
+    sync::{Arc, Mutex},
+};
 
 use clap::{Arg, Command};
-use terminal_size::terminal_size;
-
 use concat_with::concat_line;
-
 use path_absolutize::Absolutize;
+use scanner_rust::{generic_array::typenum::U8, Scanner};
 use str_utils::{EqIgnoreAsciiCaseMultiple, StartsWithIgnoreAsciiCase};
-
-use scanner_rust::generic_array::typenum::U8;
-use scanner_rust::Scanner;
-
+use terminal_size::terminal_size;
 use threadpool::ThreadPool;
 use walkdir::WalkDir;
 
@@ -97,12 +94,12 @@ fn main() -> Result<(), Box<dyn Error>> {
                             )
                             .into());
                         }
-                    }
+                    },
                     Err(_) => {
                         fs::create_dir_all(output_path)?;
 
                         Some(output_path)
-                    }
+                    },
                 }
             } else if output_path.is_dir() {
                 return Err(format!(
@@ -113,7 +110,7 @@ fn main() -> Result<(), Box<dyn Error>> {
             } else {
                 Some(output_path)
             }
-        }
+        },
         None => None,
     };
 
@@ -157,7 +154,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                         let output_path = output_path.join(p);
 
                         Some(output_path)
-                    }
+                    },
                     None => None,
                 };
 
@@ -189,7 +186,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                         let output_path = output_path.join(p);
 
                         Some(output_path)
-                    }
+                    },
                     None => None,
                 };
 
@@ -298,7 +295,7 @@ fn interlacing(
                                 }
 
                                 output_path
-                            }
+                            },
                             None => input_path,
                         };
 
@@ -315,11 +312,11 @@ fn interlacing(
                         io::stdout().flush()?;
 
                         drop(mutex_guard);
-                    }
+                    },
                     None => unreachable!(),
                 }
             }
-        }
+        },
         _ => (),
     }
 
