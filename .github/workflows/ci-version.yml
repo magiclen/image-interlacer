@@ -17,6 +17,7 @@ jobs:
           - ubuntu-latest
           - macos-latest
         toolchain:
+          - 1.59
           - stable
           - nightly
         features:
