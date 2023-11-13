@@ -1,118 +1,45 @@
+mod cli;
+
 use std::{
-    error::Error,
-    fs,
-    io::{self, Write},
+    fs, io,
+    io::Write,
     path::Path,
     sync::{Arc, Mutex},
 };
 
-use clap::{Arg, Command};
-use concat_with::concat_line;
-use path_absolutize::Absolutize;
+use anyhow::{anyhow, Context};
+use cli::*;
 use scanner_rust::{generic_array::typenum::U8, Scanner};
-use str_utils::{EqIgnoreAsciiCaseMultiple, StartsWithIgnoreAsciiCase};
-use terminal_size::terminal_size;
+use str_utils::EqIgnoreAsciiCaseMultiple;
 use threadpool::ThreadPool;
 use walkdir::WalkDir;
 
-const APP_NAME: &str = "Image Interlacer";
-const CARGO_PKG_VERSION: &str = env!("CARGO_PKG_VERSION");
-const CARGO_PKG_AUTHORS: &str = env!("CARGO_PKG_AUTHORS");
+fn main() -> anyhow::Result<()> {
+    let args = get_args();
 
-fn main() -> Result<(), Box<dyn Error>> {
-    let matches = Command::new(APP_NAME)
-        .term_width(terminal_size().map(|(width, _)| width.0 as usize).unwrap_or(0))
-        .version(CARGO_PKG_VERSION)
-        .author(CARGO_PKG_AUTHORS)
-        .about(concat!("It helps you interlace an image or multiple images for web-page usage.\n\nEXAMPLES:\n", concat_line!(prefix "image-interlacer ",
-                "/path/to/image                           # Check /path/to/image and make it interlaced",
-                "/path/to/folder                          # Check /path/to/folder and make images inside it interlaced",
-                "/path/to/image  -o /path/to/image2       # Check /path/to/image and make it interlaced, and save it to /path/to/image2",
-                "/path/to/folder -o /path/to/folder2      # Check /path/to/folder and make images inside it interlaced, and save them to /path/to/folder2",
-                "/path/to/folder -o /path/to/folder2 -f   # Check /path/to/folder and make images inside it interlaced, and save them to /path/to/folder2 without overwriting checks",
-                "/path/to/folder --allow-gif -r           # Check /path/to/folder and make images inside it including GIF images interlaced and also remain their profiles",
-            )))
-        .arg(Arg::new("INPUT_PATH")
-            .required(true)
-            .help("Assign an image or a directory for image interlacing. It should be a path of a file or a directory")
-            .takes_value(true)
-        )
-        .arg(Arg::new("OUTPUT_PATH")
-            .required(false)
-            .long("output")
-            .short('o')
-            .help("Assign a destination of your generated files. It should be a path of a directory or a file depending on your input path")
-            .takes_value(true)
-        )
-        .arg(Arg::new("SINGLE_THREAD")
-            .long("single-thread")
-            .short('s')
-            .help("Use only one thread")
-        )
-        .arg(Arg::new("FORCE")
-            .long("force")
-            .short('f')
-            .help("Force to overwrite files")
-        )
-        .arg(Arg::new("ALLOW_GIF")
-            .long("allow-gif")
-            .help("Allow to do GIF interlacing")
-        )
-        .arg(Arg::new("REMAIN_PROFILE")
-            .long("remain-profile")
-            .short('r')
-            .help("Remain the profiles of all images")
-        )
-        .after_help("Enjoy it! https://magiclen.org")
-        .get_matches();
+    let is_dir =
+        args.input_path.metadata().with_context(|| anyhow!("{:?}", args.input_path))?.is_dir();
 
-    let input = matches.value_of("INPUT_PATH").unwrap();
-    let output = matches.value_of("OUTPUT_PATH");
-
-    let single_thread = matches.is_present("SINGLE_THREAD");
-    let force = matches.is_present("FORCE");
-    let allow_gif = matches.is_present("ALLOW_GIF");
-    let remain_profile = matches.is_present("REMAIN_PROFILE");
-
-    let input_path = Path::new(input);
-
-    let is_dir = input_path.metadata()?.is_dir();
-
-    let output_path = match output {
-        Some(output) => {
-            let output_path = Path::new(output);
-
-            if is_dir {
-                match output_path.metadata() {
-                    Ok(metadata) => {
-                        if metadata.is_dir() {
-                            Some(output_path)
-                        } else {
-                            return Err(format!(
-                                "`{}` is not a directory.",
-                                output_path.absolutize()?.to_string_lossy()
-                            )
-                            .into());
-                        }
-                    },
-                    Err(_) => {
-                        fs::create_dir_all(output_path)?;
-
-                        Some(output_path)
-                    },
-                }
-            } else if output_path.is_dir() {
-                return Err(format!(
-                    "`{}` is not a file.",
-                    output_path.absolutize()?.to_string_lossy()
-                )
-                .into());
-            } else {
-                Some(output_path)
+    if let Some(output_path) = args.output_path.as_deref() {
+        if is_dir {
+            match output_path.metadata() {
+                Ok(metadata) => {
+                    if !metadata.is_dir() {
+                        return Err(anyhow!("{output_path:?} is not a directory.",));
+                    }
+                },
+                Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                    fs::create_dir_all(output_path)
+                        .with_context(|| anyhow!("{:?}", output_path))?;
+                },
+                Err(error) => {
+                    return Err(error).with_context(|| anyhow!("{:?}", output_path));
+                },
             }
-        },
-        None => None,
-    };
+        } else if output_path.is_dir() {
+            return Err(anyhow!("{output_path:?} is a directory."));
+        }
+    }
 
     let sc: Arc<Mutex<Scanner<io::Stdin, U8>>> = Arc::new(Mutex::new(Scanner::new2(io::stdin())));
     let overwriting: Arc<Mutex<u8>> = Arc::new(Mutex::new(0));
@@ -120,8 +47,9 @@ fn main() -> Result<(), Box<dyn Error>> {
     if is_dir {
         let mut image_paths = Vec::new();
 
-        for dir_entry in WalkDir::new(input_path).into_iter().filter_map(|e| e.ok()) {
-            if !dir_entry.metadata()?.is_file() {
+        for dir_entry in WalkDir::new(args.input_path.as_path()).into_iter().filter_map(|e| e.ok())
+        {
+            if dir_entry.metadata().with_context(|| anyhow!("{dir_entry:?}"))?.is_dir() {
                 continue;
             }
 
@@ -131,7 +59,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                 if let Some(extension) = extension.to_str() {
                     let mut allow_extensions = vec!["jpg", "jpeg", "png"];
 
-                    if allow_gif {
+                    if args.allow_gif {
                         allow_extensions.push("gif");
                     }
 
@@ -145,11 +73,12 @@ fn main() -> Result<(), Box<dyn Error>> {
             }
         }
 
-        if single_thread {
+        if args.single_thread {
             for image_path in image_paths {
-                let output_path = match output_path.as_ref() {
+                let output_path = match args.output_path.as_ref() {
                     Some(output_path) => {
-                        let p = pathdiff::diff_paths(&image_path, input_path).unwrap();
+                        let p =
+                            pathdiff::diff_paths(&image_path, args.input_path.as_path()).unwrap();
 
                         let output_path = output_path.join(p);
 
@@ -158,18 +87,15 @@ fn main() -> Result<(), Box<dyn Error>> {
                     None => None,
                 };
 
-                if let Err(err) = interlacing(
-                    allow_gif,
-                    remain_profile,
-                    force,
+                interlacing(
+                    args.allow_gif,
+                    args.remain_profile,
+                    args.force,
                     &sc,
                     &overwriting,
                     image_path.as_path(),
                     output_path.as_deref(),
-                ) {
-                    eprintln!("{}", err);
-                    io::stderr().flush()?;
-                }
+                )?;
             }
         } else {
             let cpus = num_cpus::get();
@@ -179,9 +105,10 @@ fn main() -> Result<(), Box<dyn Error>> {
             for image_path in image_paths {
                 let sc = sc.clone();
                 let overwriting = overwriting.clone();
-                let output_path = match output_path.as_ref() {
+                let output_path = match args.output_path.as_ref() {
                     Some(output_path) => {
-                        let p = pathdiff::diff_paths(&image_path, input_path).unwrap();
+                        let p =
+                            pathdiff::diff_paths(&image_path, args.input_path.as_path()).unwrap();
 
                         let output_path = output_path.join(p);
 
@@ -191,16 +118,16 @@ fn main() -> Result<(), Box<dyn Error>> {
                 };
 
                 pool.execute(move || {
-                    if let Err(err) = interlacing(
-                        allow_gif,
-                        remain_profile,
-                        force,
+                    if let Err(error) = interlacing(
+                        args.allow_gif,
+                        args.remain_profile,
+                        args.force,
                         &sc,
                         &overwriting,
                         image_path.as_path(),
                         output_path.as_deref(),
                     ) {
-                        eprintln!("{}", err);
+                        eprintln!("{error:?}");
                         io::stderr().flush().unwrap();
                     }
                 });
@@ -209,24 +136,35 @@ fn main() -> Result<(), Box<dyn Error>> {
             pool.join();
         }
     } else {
-        interlacing(allow_gif, remain_profile, force, &sc, &overwriting, input_path, output_path)?;
+        interlacing(
+            args.allow_gif,
+            args.remain_profile,
+            args.force,
+            &sc,
+            &overwriting,
+            args.input_path,
+            args.output_path.as_ref(),
+        )?;
     }
 
     Ok(())
 }
 
-fn interlacing(
+fn interlacing<IP: AsRef<Path>, OP: AsRef<Path>>(
     allow_gif: bool,
     remain_profile: bool,
     force: bool,
     sc: &Arc<Mutex<Scanner<io::Stdin, U8>>>,
     overwriting: &Arc<Mutex<u8>>,
-    input_path: &Path,
-    output_path: Option<&Path>,
-) -> Result<(), Box<dyn Error>> {
+    input_path: IP,
+    output_path: Option<OP>,
+) -> anyhow::Result<()> {
+    let input_path = input_path.as_ref();
+
     let input_image_resource = image_convert::ImageResource::from_path(input_path);
 
-    let input_identify = image_convert::identify_ping(&input_image_resource)?;
+    let input_identify = image_convert::identify_ping(&input_image_resource)
+        .with_context(|| anyhow!("{input_path:?}"))?;
 
     match input_identify.interlace {
         image_convert::InterlaceType::NoInterlace
@@ -241,7 +179,8 @@ fn interlacing(
                 let mut output = None;
 
                 let input_identify =
-                    image_convert::identify_read(&mut output, &input_image_resource)?;
+                    image_convert::identify_read(&mut output, &input_image_resource)
+                        .with_context(|| anyhow!("{input_path:?}"))?;
 
                 match output {
                     Some(mut magic_wand) => {
@@ -254,41 +193,47 @@ fn interlacing(
                             magic_wand.profile_image("*", None)?;
                         }
 
-                        let output_path = match output_path.as_ref() {
+                        let output_path = match output_path.as_ref().map(|p| p.as_ref()) {
                             Some(output_path) => {
                                 if output_path.exists() {
                                     if !force {
                                         let mutex_guard = overwriting.lock().unwrap();
 
-                                        let allow_overwrite = loop {
+                                        loop {
                                             print!(
-                                                "`{}` exists, do you want to overwrite it? [y/n] ",
-                                                output_path.absolutize()?.to_string_lossy()
+                                                "{output_path:?} exists, do you want to overwrite \
+                                                 it? [Y/N] ",
                                             );
-                                            io::stdout().flush()?;
+                                            io::stdout()
+                                                .flush()
+                                                .with_context(|| anyhow!("stdout"))?;
 
-                                            let token = sc
+                                            match sc
                                                 .lock()
                                                 .unwrap()
-                                                .next()?
-                                                .ok_or_else(|| "Read EOF.".to_string())?;
-
-                                            if token
-                                                .starts_with_ignore_ascii_case_with_lowercase("y")
+                                                .next_line()
+                                                .with_context(|| anyhow!("stdout"))?
                                             {
-                                                break true;
-                                            } else if token
-                                                .starts_with_ignore_ascii_case_with_lowercase("n")
-                                            {
-                                                break false;
+                                                Some(token) => {
+                                                    match token.to_ascii_uppercase().as_str() {
+                                                        "Y" => {
+                                                            break;
+                                                        },
+                                                        "N" => {
+                                                            return Ok(());
+                                                        },
+                                                        _ => {
+                                                            continue;
+                                                        },
+                                                    }
+                                                },
+                                                None => {
+                                                    return Ok(());
+                                                },
                                             }
-                                        };
+                                        }
 
                                         drop(mutex_guard);
-
-                                        if !allow_overwrite {
-                                            return Ok(());
-                                        }
                                     }
                                 } else {
                                     fs::create_dir_all(output_path.parent().unwrap())?;
@@ -305,10 +250,7 @@ fn interlacing(
 
                         let mutex_guard = overwriting.lock().unwrap();
 
-                        println!(
-                            "`{}` has been interlaced.",
-                            output_path.absolutize()?.to_string_lossy()
-                        );
+                        println!("{:?} has been interlaced.", output_path.canonicalize().unwrap());
                         io::stdout().flush()?;
 
                         drop(mutex_guard);
