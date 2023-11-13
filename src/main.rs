@@ -236,7 +236,10 @@ fn interlacing<IP: AsRef<Path>, OP: AsRef<Path>>(
                                         drop(mutex_guard);
                                     }
                                 } else {
-                                    fs::create_dir_all(output_path.parent().unwrap())?;
+                                    let dir_path = output_path.parent().unwrap();
+
+                                    fs::create_dir_all(dir_path)
+                                        .with_context(|| anyhow!("{dir_path:?}"))?;
                                 }
 
                                 output_path
