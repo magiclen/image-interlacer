@@ -167,8 +167,7 @@ fn interlacing<IP: AsRef<Path>, OP: AsRef<Path>>(
         .with_context(|| anyhow!("{input_path:?}"))?;
 
     match input_identify.interlace {
-        image_convert::InterlaceType::NoInterlace
-        | image_convert::InterlaceType::UndefinedInterlace => {
+        image_convert::InterlaceType::No | image_convert::InterlaceType::Undefined => {
             let allow_interlacing = match input_identify.format.as_str() {
                 "JPEG" | "PNG" => true,
                 "GIF" => allow_gif,
@@ -184,10 +183,7 @@ fn interlacing<IP: AsRef<Path>, OP: AsRef<Path>>(
 
                 match output {
                     Some(mut magic_wand) => {
-                        magic_wand.set_interlace_scheme(
-                            image_convert::InterlaceType::LineInterlace.ordinal()
-                                as image_convert::magick_rust::bindings::InterlaceType,
-                        )?;
+                        magic_wand.set_interlace_scheme(image_convert::InterlaceType::Line)?;
 
                         if !remain_profile {
                             magic_wand.profile_image("*", None)?;
