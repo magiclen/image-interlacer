@@ -26,10 +26,8 @@ terminal_size = "0.4"
 anyhow = "1"
 
 image-convert = "0.21"
-num_cpus = "1"
 scanner-rust = "3"
 str-utils = "0.3"
-pathdiff = "0.2"
 threadpool = "1"
 
 walkdir = "2"

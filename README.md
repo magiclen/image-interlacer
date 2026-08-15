@@ -5,6 +5,37 @@ Image Interlacer
 
 It helps you interlace an image or multiple images for web-page usage.
 
+## Installation
+
+This program links against **ImageMagick 7** built with **HDRI** enabled, so the library and its development headers have to be installed before building. Distribution packages are often ImageMagick 6, or are built without HDRI, in which case building from source is the reliable route.
+
+#### Debian / Ubuntu
+
+```bash
+sudo apt install libwebp-dev
+wget https://download.imagemagick.org/archive/ImageMagick.tar.gz
+tar xf ImageMagick.tar.gz
+cd ImageMagick-*
+./configure --enable-hdri
+make -j$(nproc)
+sudo make install
+sudo ldconfig
+```
+
+#### macOS
+
+```bash
+brew install imagemagick
+```
+
+Once ImageMagick is in place,
+
+```bash
+cargo install image-interlacer
+```
+
+The [CI workflow](.github/workflows/ci.yml) is a working reference for both platforms, and the [Makefile](Makefile) builds a statically linked musl binary.
+
 ## Help
 
 ```
