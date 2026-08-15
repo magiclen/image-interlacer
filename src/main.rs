@@ -7,9 +7,9 @@ use std::{
     sync::{Arc, Mutex},
 };
 
-use anyhow::{anyhow, Context};
+use anyhow::{Context, anyhow};
 use cli::*;
-use scanner_rust::{generic_array::typenum::U8, Scanner};
+use scanner_rust::Scanner;
 use str_utils::EqIgnoreAsciiCaseMultiple;
 use threadpool::ThreadPool;
 use walkdir::WalkDir;
@@ -41,7 +41,7 @@ fn main() -> anyhow::Result<()> {
         }
     }
 
-    let sc: Arc<Mutex<Scanner<io::Stdin, U8>>> = Arc::new(Mutex::new(Scanner::new2(io::stdin())));
+    let sc: Arc<Mutex<Scanner<io::Stdin, 8>>> = Arc::new(Mutex::new(Scanner::new2(io::stdin())));
     let overwriting: Arc<Mutex<u8>> = Arc::new(Mutex::new(0));
 
     if is_dir {
@@ -154,7 +154,7 @@ fn interlacing<IP: AsRef<Path>, OP: AsRef<Path>>(
     allow_gif: bool,
     remain_profile: bool,
     force: bool,
-    sc: &Arc<Mutex<Scanner<io::Stdin, U8>>>,
+    sc: &Arc<Mutex<Scanner<io::Stdin, 8>>>,
     overwriting: &Arc<Mutex<u8>>,
     input_path: IP,
     output_path: Option<OP>,

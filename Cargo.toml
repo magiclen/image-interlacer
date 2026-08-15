@@ -2,8 +2,8 @@
 name = "image-interlacer"
 version = "0.1.24"
 authors = ["Magic Len <len@magiclen.org>"]
-edition = "2021"
-rust-version = "1.74"
+edition = "2024"
+rust-version = "1.85"
 repository = "https://github.com/magiclen/image-interlacer"
 homepage = "https://magiclen.org/image-interlacer"
 keywords = ["image", "interlacing", "gif", "jpeg", "png"]
@@ -21,14 +21,14 @@ strip = true
 [dependencies]
 clap = { version = "4", features = ["derive"] }
 concat-with = "0.2"
-terminal_size = "0.3"
+terminal_size = "0.4"
 
 anyhow = "1"
 
-image-convert = "0.17"
+image-convert = "0.21"
 num_cpus = "1"
-scanner-rust = "2"
-str-utils = "0.1"
+scanner-rust = "3"
+str-utils = "0.3"
 pathdiff = "0.2"
 threadpool = "1"
 
