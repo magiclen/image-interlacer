@@ -36,6 +36,10 @@ cargo install image-interlacer
 
 The [CI workflow](.github/workflows/ci.yml) is a working reference for both platforms, and the [Makefile](Makefile) builds a statically linked musl binary.
 
+## Note
+
+An image is decoded, switched to an interlaced scheme and encoded again. For PNG and GIF that round trip is lossless, but for JPEG it is not: the result is re-compressed rather than rearranged in place, so running this program on the same JPEG over and over degrades it.
+
 ## Help
 
 ```

@@ -1,7 +1,7 @@
 mod cli;
 
 use std::{
-    fs, io,
+    fmt, fs, io,
     io::Write,
     path::{Path, PathBuf},
     process,
@@ -14,13 +14,19 @@ use std::{
 
 use anyhow::{Context, anyhow};
 use cli::*;
-use scanner_rust::Scanner;
-use str_utils::EqIgnoreAsciiCaseMultiple;
 use threadpool::ThreadPool;
 use walkdir::WalkDir;
 
 const ALLOW_EXTENSIONS: [&str; 3] = ["jpg", "jpeg", "png"];
 const ALLOW_EXTENSIONS_WITH_GIF: [&str; 4] = ["jpg", "jpeg", "png", "gif"];
+
+/// The options which decide how an image is interlaced.
+#[derive(Debug, Clone, Copy)]
+struct Flags {
+    allow_gif:      bool,
+    remain_profile: bool,
+    force:          bool,
+}
 
 fn report_error(console_lock: &Mutex<()>, error: &anyhow::Error) {
     let _console_lock = console_lock.lock().unwrap();
@@ -30,38 +36,71 @@ fn report_error(console_lock: &Mutex<()>, error: &anyhow::Error) {
     let _ = stderr.flush();
 }
 
+/// Prints a message to stdout. A closed pipe must not take the whole program down, so a failed write is dropped just like the ones to stderr.
+fn report_message(console_lock: &Mutex<()>, message: fmt::Arguments<'_>) {
+    let _console_lock = console_lock.lock().unwrap();
+    let mut stdout = io::stdout().lock();
+
+    let _ = writeln!(stdout, "{message}");
+    let _ = stdout.flush();
+}
+
+/// Keeps ImageMagick from spreading a single operation over every core, because in this mode the thread pool is what parallelizes the work.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+fn limit_magick_threads() -> anyhow::Result<()> {
+    use image_convert::magick_rust::{MagickWand, ResourceType};
+
+    MagickWand::set_resource_limit(ResourceType::Thread, 1)
+        .with_context(|| anyhow!("ImageMagick thread limit"))
+}
+
+/// `set_resource_limit` is not available on this platform, so ImageMagick keeps deciding its thread count on its own.
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+fn limit_magick_threads() -> anyhow::Result<()> {
+    Ok(())
+}
+
 fn main() -> anyhow::Result<()> {
-    let mut args = get_args();
+    let CLIArgs {
+        mut input_path,
+        output_path,
+        single_thread,
+        force,
+        allow_gif,
+        remain_profile,
+    } = get_args();
+
+    let flags = Flags {
+        allow_gif,
+        remain_profile,
+        force,
+    };
 
     // A symlink named on the command line is an alias for the real image, and renaming over it would replace the link itself instead of updating what it points at.
-    if args
-        .input_path
+    if input_path
         .symlink_metadata()
-        .with_context(|| anyhow!("{:?}", args.input_path))?
+        .with_context(|| anyhow!("{input_path:?}"))?
         .file_type()
         .is_symlink()
     {
-        args.input_path =
-            args.input_path.canonicalize().with_context(|| anyhow!("{:?}", args.input_path))?;
+        input_path = input_path.canonicalize().with_context(|| anyhow!("{input_path:?}"))?;
     }
 
-    let is_dir =
-        args.input_path.metadata().with_context(|| anyhow!("{:?}", args.input_path))?.is_dir();
+    let is_dir = input_path.metadata().with_context(|| anyhow!("{input_path:?}"))?.is_dir();
 
-    if let Some(output_path) = args.output_path.as_deref() {
+    if let Some(output_path) = output_path.as_deref() {
         if is_dir {
             match output_path.metadata() {
                 Ok(metadata) => {
                     if !metadata.is_dir() {
-                        return Err(anyhow!("{output_path:?} is not a directory.",));
+                        return Err(anyhow!("{output_path:?} is not a directory."));
                     }
                 },
                 Err(error) if error.kind() == io::ErrorKind::NotFound => {
-                    fs::create_dir_all(output_path)
-                        .with_context(|| anyhow!("{:?}", output_path))?;
+                    fs::create_dir_all(output_path).with_context(|| anyhow!("{output_path:?}"))?;
                 },
                 Err(error) => {
-                    return Err(error).with_context(|| anyhow!("{:?}", output_path));
+                    return Err(error).with_context(|| anyhow!("{output_path:?}"));
                 },
             }
         } else if output_path.is_dir() {
@@ -69,14 +108,16 @@ fn main() -> anyhow::Result<()> {
         }
     }
 
-    let sc: Arc<Mutex<Scanner<io::Stdin, 8>>> = Arc::new(Mutex::new(Scanner::new2(io::stdin())));
+    // ImageMagick has to be initialized once before any wand is used. Doing it here keeps it on the main thread and lets the thread limit below apply to a ready environment.
+    image_convert::start_call_once();
+
     let console_lock: Arc<Mutex<()>> = Arc::new(Mutex::new(()));
     let error_count = Arc::new(AtomicUsize::new(0));
 
     if is_dir {
         let mut image_paths = Vec::new();
 
-        for dir_entry in WalkDir::new(args.input_path.as_path()) {
+        for dir_entry in WalkDir::new(input_path.as_path()) {
             let dir_entry = match dir_entry {
                 Ok(dir_entry) => dir_entry,
                 Err(error) => {
@@ -97,95 +138,57 @@ fn main() -> anyhow::Result<()> {
             let p = dir_entry.into_path();
 
             if let Some(extension) = p.extension().and_then(|extension| extension.to_str()) {
-                if is_allowed_extension(extension, args.allow_gif) {
+                if is_allowed_extension(extension, allow_gif) {
                     image_paths.push(p);
                 }
             }
         }
 
-        if args.single_thread {
+        if single_thread {
             for image_path in image_paths {
-                let output_path = match map_output_path(
-                    args.input_path.as_path(),
-                    args.output_path.as_deref(),
-                    image_path.as_path(),
-                ) {
-                    Ok(output_path) => output_path,
-                    Err(error) => {
-                        report_error(&console_lock, &error);
-                        error_count.fetch_add(1, Ordering::Relaxed);
-
-                        continue;
-                    },
-                };
-
-                if let Err(error) = interlacing(
-                    args.allow_gif,
-                    args.remain_profile,
-                    args.force,
-                    &sc,
+                interlace_entry(
+                    flags,
                     &console_lock,
-                    image_path.as_path(),
+                    &error_count,
+                    input_path.as_path(),
                     output_path.as_deref(),
-                ) {
-                    report_error(&console_lock, &error);
-                    error_count.fetch_add(1, Ordering::Relaxed);
-                }
+                    image_path.as_path(),
+                );
             }
         } else {
             let cpus = thread::available_parallelism().map(|cpus| cpus.get()).unwrap_or(1);
 
+            limit_magick_threads()?;
+
             // ImageMagick parallelizes each operation internally, so one worker per core keeps the throughput while holding far fewer decoded images at once.
             let pool = ThreadPool::new(cpus);
 
+            // Every job reads the same two roots, so they are shared instead of being copied into each of them.
+            let input_root: Arc<Path> = Arc::from(input_path.as_path());
+            let output_root: Option<Arc<Path>> = output_path.as_deref().map(Arc::from);
+
             for image_path in image_paths {
-                let sc = sc.clone();
                 let console_lock = console_lock.clone();
                 let error_count = error_count.clone();
-                // Bailing out here would leave `main` returning while the pool still holds jobs, and dropping a `ThreadPool` does not wait for them.
-                let output_path = match map_output_path(
-                    args.input_path.as_path(),
-                    args.output_path.as_deref(),
-                    image_path.as_path(),
-                ) {
-                    Ok(output_path) => output_path,
-                    Err(error) => {
-                        report_error(&console_lock, &error);
-                        error_count.fetch_add(1, Ordering::Relaxed);
-
-                        continue;
-                    },
-                };
+                let input_root = input_root.clone();
+                let output_root = output_root.clone();
 
                 pool.execute(move || {
-                    if let Err(error) = interlacing(
-                        args.allow_gif,
-                        args.remain_profile,
-                        args.force,
-                        &sc,
+                    interlace_entry(
+                        flags,
                         &console_lock,
+                        &error_count,
+                        &input_root,
+                        output_root.as_deref(),
                         image_path.as_path(),
-                        output_path.as_deref(),
-                    ) {
-                        report_error(&console_lock, &error);
-
-                        error_count.fetch_add(1, Ordering::Relaxed);
-                    }
+                    );
                 });
             }
 
             pool.join();
         }
     } else {
-        interlacing(
-            args.allow_gif,
-            args.remain_profile,
-            args.force,
-            &sc,
-            &console_lock,
-            args.input_path.as_path(),
-            args.output_path.as_deref(),
-        )?;
+        interlacing(flags, &console_lock, input_path.as_path(), output_path.as_deref())?;
     }
 
     let error_count = error_count.load(Ordering::Relaxed);
@@ -198,12 +201,31 @@ fn main() -> anyhow::Result<()> {
     Ok(())
 }
 
+/// Interlaces one image of a directory tree. A failure is reported and counted instead of being returned, because bailing out would leave the remaining images unhandled and the thread pool holding jobs which nothing waits for.
+fn interlace_entry(
+    flags: Flags,
+    console_lock: &Mutex<()>,
+    error_count: &AtomicUsize,
+    input_root: &Path,
+    output_root: Option<&Path>,
+    image_path: &Path,
+) {
+    let result = map_output_path(input_root, output_root, image_path).and_then(|output_path| {
+        interlacing(flags, console_lock, image_path, output_path.as_deref())
+    });
+
+    if let Err(error) = result {
+        report_error(console_lock, &error);
+        error_count.fetch_add(1, Ordering::Relaxed);
+    }
+}
+
 /// Checks whether a file extension belongs to an image format this program can interlace.
 fn is_allowed_extension(extension: &str, allow_gif: bool) -> bool {
     let allow_extensions: &[&str] =
         if allow_gif { &ALLOW_EXTENSIONS_WITH_GIF } else { &ALLOW_EXTENSIONS };
 
-    extension.eq_ignore_ascii_case_with_lowercase_multiple(allow_extensions).is_some()
+    allow_extensions.iter().any(|allow_extension| extension.eq_ignore_ascii_case(allow_extension))
 }
 
 /// Checks whether an ImageMagick format name belongs to an image format this program can interlace.
@@ -242,24 +264,25 @@ fn parse_overwrite_answer(answer: &str) -> Option<bool> {
 }
 
 /// Asks whether an existing file may be replaced. The console lock is held for the whole prompt so that other threads cannot interleave their output.
-fn confirm_overwrite(
-    sc: &Mutex<Scanner<io::Stdin, 8>>,
-    console_lock: &Mutex<()>,
-    output_path: &Path,
-) -> anyhow::Result<bool> {
+fn confirm_overwrite(console_lock: &Mutex<()>, output_path: &Path) -> anyhow::Result<bool> {
     let _console_lock = console_lock.lock().unwrap();
+    let mut stdout = io::stdout().lock();
+    let stdin = io::stdin();
+    let mut answer = String::new();
 
     loop {
-        print!("{output_path:?} exists, do you want to overwrite it? [Y/N] ");
-        io::stdout().flush().with_context(|| anyhow!("stdout"))?;
+        let _ = write!(stdout, "{output_path:?} exists, do you want to overwrite it? [Y/N] ");
+        let _ = stdout.flush();
 
-        match sc.lock().unwrap().next_line().with_context(|| anyhow!("stdin"))? {
-            Some(answer) => {
-                if let Some(overwrite) = parse_overwrite_answer(answer.as_str()) {
-                    return Ok(overwrite);
-                }
-            },
-            None => return Ok(false),
+        answer.clear();
+
+        // Nothing left to read, such as a closed stdin, leaves the file alone.
+        if stdin.read_line(&mut answer).with_context(|| anyhow!("stdin"))? == 0 {
+            return Ok(false);
+        }
+
+        if let Some(overwrite) = parse_overwrite_answer(answer.as_str()) {
+            return Ok(overwrite);
         }
     }
 }
@@ -298,10 +321,7 @@ fn write_atomically(output_path: &Path, data: &[u8]) -> anyhow::Result<()> {
 }
 
 fn interlacing(
-    allow_gif: bool,
-    remain_profile: bool,
-    force: bool,
-    sc: &Mutex<Scanner<io::Stdin, 8>>,
+    flags: Flags,
     console_lock: &Mutex<()>,
     input_path: &Path,
     output_path: Option<&Path>,
@@ -314,22 +334,21 @@ fn interlacing(
     let input_identify = image_convert::identify_ping(&input_image_resource)
         .with_context(|| anyhow!("{input_path:?}"))?;
 
-    if !matches!(
-        input_identify.interlace,
-        image_convert::InterlaceType::No | image_convert::InterlaceType::Undefined
-    ) {
-        let _console_lock = console_lock.lock().unwrap();
-
-        // Saying nothing would leave an output directory quietly missing this image.
-        println!("{input_path:?} is already interlaced.");
+    if !is_allowed_format(input_identify.format.as_str(), flags.allow_gif) {
+        report_message(
+            console_lock,
+            format_args!("{input_path:?} is not an interlaceable format."),
+        );
 
         return Ok(());
     }
 
-    if !is_allowed_format(input_identify.format.as_str(), allow_gif) {
-        let _console_lock = console_lock.lock().unwrap();
-
-        println!("{input_path:?} is not an interlaceable format.");
+    if !matches!(
+        input_identify.interlace,
+        image_convert::InterlaceType::No | image_convert::InterlaceType::Undefined
+    ) {
+        // Saying nothing would leave an output directory quietly missing this image.
+        report_message(console_lock, format_args!("{input_path:?} is already interlaced."));
 
         return Ok(());
     }
@@ -342,7 +361,7 @@ fn interlacing(
                     return Err(anyhow!("{output_path:?} is a symbolic link."));
                 },
                 Ok(_) => {
-                    if !force && !confirm_overwrite(sc, console_lock, output_path)? {
+                    if !flags.force && !confirm_overwrite(console_lock, output_path)? {
                         return Ok(());
                     }
                 },
@@ -366,13 +385,16 @@ fn interlacing(
     let input_identify = image_convert::identify_read(&mut output, &input_image_resource)
         .with_context(|| anyhow!("{input_path:?}"))?;
 
+    // The wand holds an image of its own now, so keeping the file bytes would only add to what the encoding below needs.
+    drop(input_image_resource);
+
     let mut magic_wand = output.expect("identify_read fills the output in whenever it succeeds");
 
     magic_wand
         .set_interlace_scheme(image_convert::InterlaceType::Line)
         .with_context(|| anyhow!("{input_path:?}"))?;
 
-    if !remain_profile {
+    if !flags.remain_profile {
         // `profile_image` only touches the frame the iterator points at, so every frame of an animation has to be visited.
         magic_wand.reset_iterator();
 
@@ -393,12 +415,15 @@ fn interlacing(
 
     write_atomically(output_path, &temp)?;
 
-    let _console_lock = console_lock.lock().unwrap();
-
     match output_path.canonicalize() {
         // The file is already written at this point, so a failure here must not be fatal.
-        Ok(canonicalized_path) => println!("{canonicalized_path:?} has been interlaced."),
-        Err(_) => println!("{output_path:?} has been interlaced."),
+        Ok(canonicalized_path) => report_message(
+            console_lock,
+            format_args!("{canonicalized_path:?} has been interlaced."),
+        ),
+        Err(_) => {
+            report_message(console_lock, format_args!("{output_path:?} has been interlaced."))
+        },
     }
 
     Ok(())
@@ -558,10 +583,13 @@ mod tests {
 
         fs::write(input_path.as_path(), ANIMATED_GIF).unwrap();
 
-        let sc = Mutex::new(Scanner::new2(io::stdin()));
         let console_lock = Mutex::new(());
 
-        interlacing(true, false, true, &sc, &console_lock, input_path.as_path(), None).unwrap();
+        let flags = Flags {
+            allow_gif: true, remain_profile: false, force: true
+        };
+
+        interlacing(flags, &console_lock, input_path.as_path(), None).unwrap();
 
         let mut output = None;
 
