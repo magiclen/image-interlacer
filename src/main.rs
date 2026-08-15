@@ -22,8 +22,28 @@ use walkdir::WalkDir;
 const ALLOW_EXTENSIONS: [&str; 3] = ["jpg", "jpeg", "png"];
 const ALLOW_EXTENSIONS_WITH_GIF: [&str; 4] = ["jpg", "jpeg", "png", "gif"];
 
+fn report_error(console_lock: &Mutex<()>, error: &anyhow::Error) {
+    let _console_lock = console_lock.lock().unwrap();
+    let mut stderr = io::stderr().lock();
+
+    let _ = writeln!(stderr, "{error:?}");
+    let _ = stderr.flush();
+}
+
 fn main() -> anyhow::Result<()> {
-    let args = get_args();
+    let mut args = get_args();
+
+    // A symlink named on the command line is an alias for the real image, and renaming over it would replace the link itself instead of updating what it points at.
+    if args
+        .input_path
+        .symlink_metadata()
+        .with_context(|| anyhow!("{:?}", args.input_path))?
+        .file_type()
+        .is_symlink()
+    {
+        args.input_path =
+            args.input_path.canonicalize().with_context(|| anyhow!("{:?}", args.input_path))?;
+    }
 
     let is_dir =
         args.input_path.metadata().with_context(|| anyhow!("{:?}", args.input_path))?.is_dir();
@@ -61,7 +81,7 @@ fn main() -> anyhow::Result<()> {
                 Ok(dir_entry) => dir_entry,
                 Err(error) => {
                     // Dropping the entry silently would hide a whole unreadable subtree and still report success.
-                    eprintln!("{error}");
+                    report_error(&console_lock, &anyhow::Error::new(error));
                     error_count.fetch_add(1, Ordering::Relaxed);
 
                     continue;
@@ -69,7 +89,8 @@ fn main() -> anyhow::Result<()> {
             };
 
             // `file_type` reuses what the directory listing already reported, so it costs no syscall.
-            if dir_entry.file_type().is_dir() {
+            // A symlink either duplicates a file which is walked on its own or points outside the requested tree, and neither is this program's business.
+            if !dir_entry.file_type().is_file() {
                 continue;
             }
 
@@ -84,13 +105,21 @@ fn main() -> anyhow::Result<()> {
 
         if args.single_thread {
             for image_path in image_paths {
-                let output_path = map_output_path(
+                let output_path = match map_output_path(
                     args.input_path.as_path(),
                     args.output_path.as_deref(),
                     image_path.as_path(),
-                )?;
+                ) {
+                    Ok(output_path) => output_path,
+                    Err(error) => {
+                        report_error(&console_lock, &error);
+                        error_count.fetch_add(1, Ordering::Relaxed);
 
-                interlacing(
+                        continue;
+                    },
+                };
+
+                if let Err(error) = interlacing(
                     args.allow_gif,
                     args.remain_profile,
                     args.force,
@@ -98,7 +127,10 @@ fn main() -> anyhow::Result<()> {
                     &console_lock,
                     image_path.as_path(),
                     output_path.as_deref(),
-                )?;
+                ) {
+                    report_error(&console_lock, &error);
+                    error_count.fetch_add(1, Ordering::Relaxed);
+                }
             }
         } else {
             let cpus = thread::available_parallelism().map(|cpus| cpus.get()).unwrap_or(1);
@@ -110,11 +142,20 @@ fn main() -> anyhow::Result<()> {
                 let sc = sc.clone();
                 let console_lock = console_lock.clone();
                 let error_count = error_count.clone();
-                let output_path = map_output_path(
+                // Bailing out here would leave `main` returning while the pool still holds jobs, and dropping a `ThreadPool` does not wait for them.
+                let output_path = match map_output_path(
                     args.input_path.as_path(),
                     args.output_path.as_deref(),
                     image_path.as_path(),
-                )?;
+                ) {
+                    Ok(output_path) => output_path,
+                    Err(error) => {
+                        report_error(&console_lock, &error);
+                        error_count.fetch_add(1, Ordering::Relaxed);
+
+                        continue;
+                    },
+                };
 
                 pool.execute(move || {
                     if let Err(error) = interlacing(
@@ -126,8 +167,7 @@ fn main() -> anyhow::Result<()> {
                         image_path.as_path(),
                         output_path.as_deref(),
                     ) {
-                        eprintln!("{error:?}");
-                        io::stderr().flush().unwrap();
+                        report_error(&console_lock, &error);
 
                         error_count.fetch_add(1, Ordering::Relaxed);
                     }
@@ -143,8 +183,8 @@ fn main() -> anyhow::Result<()> {
             args.force,
             &sc,
             &console_lock,
-            args.input_path,
-            args.output_path.as_ref(),
+            args.input_path.as_path(),
+            args.output_path.as_deref(),
         )?;
     }
 
@@ -192,10 +232,19 @@ fn map_output_path(
     }
 }
 
+/// Reads an answer to the overwrite prompt. `None` means the answer was not understood and the prompt has to be repeated.
+fn parse_overwrite_answer(answer: &str) -> Option<bool> {
+    match answer.trim().to_ascii_uppercase().as_str() {
+        "Y" => Some(true),
+        "N" => Some(false),
+        _ => None,
+    }
+}
+
 /// Asks whether an existing file may be replaced. The console lock is held for the whole prompt so that other threads cannot interleave their output.
 fn confirm_overwrite(
-    sc: &Arc<Mutex<Scanner<io::Stdin, 8>>>,
-    console_lock: &Arc<Mutex<()>>,
+    sc: &Mutex<Scanner<io::Stdin, 8>>,
+    console_lock: &Mutex<()>,
     output_path: &Path,
 ) -> anyhow::Result<bool> {
     let _console_lock = console_lock.lock().unwrap();
@@ -205,10 +254,10 @@ fn confirm_overwrite(
         io::stdout().flush().with_context(|| anyhow!("stdout"))?;
 
         match sc.lock().unwrap().next_line().with_context(|| anyhow!("stdin"))? {
-            Some(token) => match token.to_ascii_uppercase().as_str() {
-                "Y" => return Ok(true),
-                "N" => return Ok(false),
-                _ => continue,
+            Some(answer) => {
+                if let Some(overwrite) = parse_overwrite_answer(answer.as_str()) {
+                    return Ok(overwrite);
+                }
             },
             None => return Ok(false),
         }
@@ -223,8 +272,15 @@ fn write_atomically(output_path: &Path, data: &[u8]) -> anyhow::Result<()> {
 
     let temp_path = PathBuf::from(temp_path);
 
-    // The mode of the file being replaced has to be carried over, otherwise overwriting resets it to the default one.
-    let permissions = fs::metadata(output_path).ok().map(|metadata| metadata.permissions());
+    let permissions = match fs::symlink_metadata(output_path) {
+        // The rename below would replace the link itself rather than write through it. Callers are expected to have settled this already, so this is the last-line guard.
+        Ok(metadata) if metadata.file_type().is_symlink() => {
+            return Err(anyhow!("{output_path:?} is a symbolic link."));
+        },
+        Ok(metadata) => Some(metadata.permissions()),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => None,
+        Err(error) => return Err(error).with_context(|| anyhow!("{output_path:?}")),
+    };
 
     let result = fs::write(temp_path.as_path(), data)
         .and_then(|_| match permissions {
@@ -241,18 +297,19 @@ fn write_atomically(output_path: &Path, data: &[u8]) -> anyhow::Result<()> {
     result.with_context(|| anyhow!("{temp_path:?}"))
 }
 
-fn interlacing<IP: AsRef<Path>, OP: AsRef<Path>>(
+fn interlacing(
     allow_gif: bool,
     remain_profile: bool,
     force: bool,
-    sc: &Arc<Mutex<Scanner<io::Stdin, 8>>>,
-    console_lock: &Arc<Mutex<()>>,
-    input_path: IP,
-    output_path: Option<OP>,
+    sc: &Mutex<Scanner<io::Stdin, 8>>,
+    console_lock: &Mutex<()>,
+    input_path: &Path,
+    output_path: Option<&Path>,
 ) -> anyhow::Result<()> {
-    let input_path = input_path.as_ref();
+    // Handing ImageMagick a path means running it through `to_string_lossy` first, which turns a name that is not UTF-8 into one that does not exist. Reading the bytes here keeps the file this program was pointed at.
+    let input_data = fs::read(input_path).with_context(|| anyhow!("{input_path:?}"))?;
 
-    let input_image_resource = image_convert::ImageResource::from_path(input_path);
+    let input_image_resource = image_convert::ImageResource::Data(input_data);
 
     let input_identify = image_convert::identify_ping(&input_image_resource)
         .with_context(|| anyhow!("{input_path:?}"))?;
@@ -261,24 +318,42 @@ fn interlacing<IP: AsRef<Path>, OP: AsRef<Path>>(
         input_identify.interlace,
         image_convert::InterlaceType::No | image_convert::InterlaceType::Undefined
     ) {
+        let _console_lock = console_lock.lock().unwrap();
+
+        // Saying nothing would leave an output directory quietly missing this image.
+        println!("{input_path:?} is already interlaced.");
+
         return Ok(());
     }
 
     if !is_allowed_format(input_identify.format.as_str(), allow_gif) {
+        let _console_lock = console_lock.lock().unwrap();
+
+        println!("{input_path:?} is not an interlaceable format.");
+
         return Ok(());
     }
 
     // The destination is settled before decoding, so that declining an overwrite does not waste a full decode.
-    let output_path = match output_path.as_ref().map(|p| p.as_ref()) {
+    let output_path = match output_path {
         Some(output_path) => {
-            if output_path.exists() {
-                if !force && !confirm_overwrite(sc, console_lock, output_path)? {
-                    return Ok(());
-                }
-            } else {
-                let dir_path = output_path.parent().unwrap();
-
-                fs::create_dir_all(dir_path).with_context(|| anyhow!("{dir_path:?}"))?;
+            match fs::symlink_metadata(output_path) {
+                Ok(metadata) if metadata.file_type().is_symlink() => {
+                    return Err(anyhow!("{output_path:?} is a symbolic link."));
+                },
+                Ok(_) => {
+                    if !force && !confirm_overwrite(sc, console_lock, output_path)? {
+                        return Ok(());
+                    }
+                },
+                Err(error) if error.kind() == io::ErrorKind::NotFound => {
+                    if let Some(dir_path) =
+                        output_path.parent().filter(|dir_path| !dir_path.as_os_str().is_empty())
+                    {
+                        fs::create_dir_all(dir_path).with_context(|| anyhow!("{dir_path:?}"))?;
+                    }
+                },
+                Err(error) => return Err(error).with_context(|| anyhow!("{output_path:?}")),
             }
 
             output_path
@@ -291,22 +366,32 @@ fn interlacing<IP: AsRef<Path>, OP: AsRef<Path>>(
     let input_identify = image_convert::identify_read(&mut output, &input_image_resource)
         .with_context(|| anyhow!("{input_path:?}"))?;
 
-    // `identify_read` always fills `output` in before returning successfully.
-    let mut magic_wand = output.unwrap();
+    let mut magic_wand = output.expect("identify_read fills the output in whenever it succeeds");
 
     magic_wand
         .set_interlace_scheme(image_convert::InterlaceType::Line)
         .with_context(|| anyhow!("{input_path:?}"))?;
 
     if !remain_profile {
-        magic_wand.profile_image("*", None).with_context(|| anyhow!("{input_path:?}"))?;
+        // `profile_image` only touches the frame the iterator points at, so every frame of an animation has to be visited.
+        magic_wand.reset_iterator();
+
+        while magic_wand.next_image() {
+            magic_wand.profile_image("*", None).with_context(|| anyhow!("{input_path:?}"))?;
+        }
     }
 
+    // `write_image_blob` keeps only the frame the iterator points at, which would turn an animation into a still image.
     let temp = magic_wand
-        .write_image_blob(input_identify.format.as_str())
+        .write_images_blob(input_identify.format.as_str())
         .with_context(|| anyhow!("{input_path:?}"))?;
 
-    write_atomically(output_path, &temp).with_context(|| anyhow!("{output_path:?}"))?;
+    // Unlike `write_image_blob`, `write_images_blob` does not check the pointer it gets back, so a failed encode arrives as an empty vec rather than an error.
+    if temp.is_empty() {
+        return Err(anyhow!("{input_path:?} could not be encoded."));
+    }
+
+    write_atomically(output_path, &temp)?;
 
     let _console_lock = console_lock.lock().unwrap();
 
@@ -316,14 +401,54 @@ fn interlacing<IP: AsRef<Path>, OP: AsRef<Path>>(
         Err(_) => println!("{output_path:?} has been interlaced."),
     }
 
-    io::stdout().flush().with_context(|| anyhow!("stdout"))?;
-
     Ok(())
 }
 
 #[cfg(test)]
 mod tests {
+    use std::env;
+
     use super::*;
+
+    // A 4x4 GIF with two frames, used to check that an animation survives interlacing.
+    const ANIMATED_GIF: [u8; 95] = [
+        0x47, 0x49, 0x46, 0x38, 0x39, 0x61, 0x04, 0x00, 0x04, 0x00, 0xF0, 0x00, 0x00, 0xFF, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x21, 0xFF, 0x0B, 0x4E, 0x45, 0x54, 0x53, 0x43, 0x41, 0x50, 0x45,
+        0x32, 0x2E, 0x30, 0x03, 0x01, 0x00, 0x00, 0x00, 0x21, 0xF9, 0x04, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x2C, 0x00, 0x00, 0x00, 0x00, 0x04, 0x00, 0x04, 0x00, 0x00, 0x02, 0x04, 0x84, 0x8F,
+        0x09, 0x05, 0x00, 0x21, 0xF9, 0x04, 0x00, 0x00, 0x00, 0x00, 0x00, 0x2C, 0x00, 0x00, 0x00,
+        0x00, 0x04, 0x00, 0x04, 0x00, 0x80, 0x00, 0x00, 0xFF, 0x00, 0x00, 0x00, 0x02, 0x04, 0x84,
+        0x8F, 0x09, 0x05, 0x00, 0x3B,
+    ];
+
+    /// A directory under the system temporary directory which removes itself when it goes out of scope.
+    struct TempDir(PathBuf);
+
+    impl TempDir {
+        fn new() -> TempDir {
+            static COUNTER: AtomicUsize = AtomicUsize::new(0);
+
+            let path = env::temp_dir().join(format!(
+                "image-interlacer-{}-{}",
+                process::id(),
+                COUNTER.fetch_add(1, Ordering::Relaxed)
+            ));
+
+            fs::create_dir_all(path.as_path()).unwrap();
+
+            TempDir(path)
+        }
+
+        fn join(&self, file_name: &str) -> PathBuf {
+            self.0.join(file_name)
+        }
+    }
+
+    impl Drop for TempDir {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(self.0.as_path());
+        }
+    }
 
     #[test]
     fn allowed_extensions() {
@@ -380,5 +505,73 @@ mod tests {
             map_output_path(Path::new("/input"), None, Path::new("/input/image.png")).unwrap();
 
         assert_eq!(None, output_path);
+    }
+
+    #[test]
+    fn overwrite_answers() {
+        assert_eq!(Some(true), parse_overwrite_answer("y"));
+        assert_eq!(Some(true), parse_overwrite_answer("Y"));
+        assert_eq!(Some(true), parse_overwrite_answer("y "));
+
+        assert_eq!(Some(false), parse_overwrite_answer("n"));
+        assert_eq!(Some(false), parse_overwrite_answer("N"));
+        assert_eq!(Some(false), parse_overwrite_answer(" N"));
+
+        assert_eq!(None, parse_overwrite_answer(""));
+        assert_eq!(None, parse_overwrite_answer("maybe"));
+    }
+
+    #[test]
+    fn write_atomically_creates_a_new_file() {
+        let temp_dir = TempDir::new();
+        let output_path = temp_dir.join("image.png");
+
+        write_atomically(output_path.as_path(), b"interlaced").unwrap();
+
+        assert_eq!(b"interlaced".to_vec(), fs::read(output_path.as_path()).unwrap());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn write_atomically_keeps_the_mode_of_the_replaced_file() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let temp_dir = TempDir::new();
+        let output_path = temp_dir.join("image.png");
+
+        fs::write(output_path.as_path(), b"original").unwrap();
+        fs::set_permissions(output_path.as_path(), fs::Permissions::from_mode(0o600)).unwrap();
+
+        write_atomically(output_path.as_path(), b"interlaced").unwrap();
+
+        assert_eq!(b"interlaced".to_vec(), fs::read(output_path.as_path()).unwrap());
+        assert_eq!(
+            0o600,
+            fs::metadata(output_path.as_path()).unwrap().permissions().mode() & 0o777
+        );
+    }
+
+    #[test]
+    fn interlacing_keeps_every_frame_of_an_animation() {
+        let temp_dir = TempDir::new();
+        let input_path = temp_dir.join("animated.gif");
+
+        fs::write(input_path.as_path(), ANIMATED_GIF).unwrap();
+
+        let sc = Mutex::new(Scanner::new2(io::stdin()));
+        let console_lock = Mutex::new(());
+
+        interlacing(true, false, true, &sc, &console_lock, input_path.as_path(), None).unwrap();
+
+        let mut output = None;
+
+        let identify = image_convert::identify_read(
+            &mut output,
+            &image_convert::ImageResource::Data(fs::read(input_path.as_path()).unwrap()),
+        )
+        .unwrap();
+
+        assert_eq!(2, output.unwrap().get_number_images());
+        assert_eq!(image_convert::InterlaceType::GIF, identify.interlace);
     }
 }
