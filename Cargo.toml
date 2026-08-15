@@ -10,7 +10,7 @@ keywords = ["image", "interlacing", "gif", "jpeg", "png"]
 categories = ["command-line-utilities"]
 description = "It helps you interlace an image or multiple images for web-page usage."
 license = "MIT"
-include = ["src/**/*", "Cargo.toml", "README.md", "LICENSE"]
+include = ["src/**/*", "Cargo.toml", "Cargo.lock", "README.md", "LICENSE"]
 
 [profile.release]
 lto = true
