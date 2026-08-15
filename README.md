@@ -57,7 +57,7 @@ Arguments:
   <INPUT_PATH>  Assign an image or a directory for image interlacing. It should be a path of a file or a directory
 
 Options:
-  -o, --output-path <OUTPUT_PATH>  Assign a destination of your generated files. It should be a path of a directory or a file depending on your input path [aliases: output]
+  -o, --output-path <OUTPUT_PATH>  Assign a destination of your generated files. It should be a path of a directory or a file depending on your input path [alias: --output]
   -s, --single-thread              Use only one thread
   -f, --force                      Force to overwrite files
       --allow-gif                  Allow to do GIF interlacing
