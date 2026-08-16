@@ -23,9 +23,9 @@ const ALLOW_EXTENSIONS_WITH_GIF: [&str; 4] = ["jpg", "jpeg", "png", "gif"];
 /// The options which decide how an image is interlaced.
 #[derive(Debug, Clone, Copy)]
 struct Flags {
-    allow_gif:      bool,
-    remain_profile: bool,
-    force:          bool,
+    allow_gif:       bool,
+    remain_metadata: bool,
+    force:           bool,
 }
 
 fn report_error(console_lock: &Mutex<()>, error: &anyhow::Error) {
@@ -67,12 +67,12 @@ fn main() -> anyhow::Result<()> {
         single_thread,
         force,
         allow_gif,
-        remain_profile,
+        remain_metadata,
     } = get_args();
 
     let flags = Flags {
         allow_gif,
-        remain_profile,
+        remain_metadata,
         force,
     };
 
@@ -320,6 +320,52 @@ fn write_atomically(output_path: &Path, data: &[u8]) -> anyhow::Result<()> {
     result.with_context(|| anyhow!("{temp_path:?}"))
 }
 
+/// Encodes an image again in its own format, with an interlaced scheme. Every config is set to leave the image alone otherwise, so that nothing but the scheme changes.
+fn encode_interlaced(
+    output: &mut image_convert::ImageResource,
+    input: &image_convert::ImageResource,
+    format: &str,
+    flags: Flags,
+) -> Result<(), image_convert::MagickError> {
+    // The orientation lives in the metadata, so `image-convert` applies it to the image before throwing the metadata away.
+    let strip_metadata = !flags.remain_metadata;
+
+    match format {
+        "JPEG" => {
+            let mut config = image_convert::JPGConfig::new();
+
+            config.strip_metadata = strip_metadata;
+            config.respect_orientation = strip_metadata;
+            config.sharpen = 0f64;
+            // Re-encoding a JPEG image is lossy on its own, so at least the quality and the subsampling of the input image are kept.
+            config.quality = None;
+            config.force_to_chroma_quartered = false;
+
+            image_convert::to_jpg(output, input, &config)
+        },
+        "PNG" => {
+            let mut config = image_convert::PNGConfig::new();
+
+            config.strip_metadata = strip_metadata;
+            config.respect_orientation = strip_metadata;
+            config.sharpen = 0f64;
+
+            image_convert::to_png(output, input, &config)
+        },
+        "GIF" => {
+            let mut config = image_convert::GIFConfig::new();
+
+            config.strip_metadata = strip_metadata;
+            config.respect_orientation = strip_metadata;
+            config.sharpen = 0f64;
+
+            image_convert::to_gif(output, input, &config)
+        },
+        // The caller checks the format beforehand, so this is the last-line guard.
+        _ => Err(image_convert::MagickError(format!("{format} cannot be interlaced."))),
+    }
+}
+
 fn interlacing(
     flags: Flags,
     console_lock: &Mutex<()>,
@@ -338,6 +384,16 @@ fn interlacing(
         report_message(
             console_lock,
             format_args!("{input_path:?} is not an interlaceable format."),
+        );
+
+        return Ok(());
+    }
+
+    if input_identify.has_unreadable_frames {
+        // ImageMagick reads the first frame of such an image only, so writing it back would throw the animation away for good.
+        report_message(
+            console_lock,
+            format_args!("{input_path:?} holds an animation which ImageMagick cannot read."),
         );
 
         return Ok(());
@@ -380,40 +436,23 @@ fn interlacing(
         None => input_path,
     };
 
-    let mut output = None;
+    let mut output_image_resource = image_convert::ImageResource::Data(Vec::new());
 
-    let input_identify = image_convert::identify_read(&mut output, &input_image_resource)
-        .with_context(|| anyhow!("{input_path:?}"))?;
+    encode_interlaced(
+        &mut output_image_resource,
+        &input_image_resource,
+        input_identify.format.as_str(),
+        flags,
+    )
+    .with_context(|| anyhow!("{input_path:?}"))?;
 
-    // The wand holds an image of its own now, so keeping the file bytes would only add to what the encoding below needs.
+    // Only the encoded data is left to write, so the file bytes are not needed any more.
     drop(input_image_resource);
 
-    let mut magic_wand = output.expect("identify_read fills the output in whenever it succeeds");
+    let output_data =
+        output_image_resource.into_vec().expect("the output resource is created as data");
 
-    magic_wand
-        .set_interlace_scheme(image_convert::InterlaceType::Line)
-        .with_context(|| anyhow!("{input_path:?}"))?;
-
-    if !flags.remain_profile {
-        // `profile_image` only touches the frame the iterator points at, so every frame of an animation has to be visited.
-        magic_wand.reset_iterator();
-
-        while magic_wand.next_image() {
-            magic_wand.profile_image("*", None).with_context(|| anyhow!("{input_path:?}"))?;
-        }
-    }
-
-    // `write_image_blob` keeps only the frame the iterator points at, which would turn an animation into a still image.
-    let temp = magic_wand
-        .write_images_blob(input_identify.format.as_str())
-        .with_context(|| anyhow!("{input_path:?}"))?;
-
-    // Unlike `write_image_blob`, `write_images_blob` does not check the pointer it gets back, so a failed encode arrives as an empty vec rather than an error.
-    if temp.is_empty() {
-        return Err(anyhow!("{input_path:?} could not be encoded."));
-    }
-
-    write_atomically(output_path, &temp)?;
+    write_atomically(output_path, &output_data)?;
 
     match output_path.canonicalize() {
         // The file is already written at this point, so a failure here must not be fatal.
@@ -586,20 +625,17 @@ mod tests {
         let console_lock = Mutex::new(());
 
         let flags = Flags {
-            allow_gif: true, remain_profile: false, force: true
+            allow_gif: true, remain_metadata: false, force: true
         };
 
         interlacing(flags, &console_lock, input_path.as_path(), None).unwrap();
 
-        let mut output = None;
-
-        let identify = image_convert::identify_read(
-            &mut output,
-            &image_convert::ImageResource::Data(fs::read(input_path.as_path()).unwrap()),
-        )
+        let identify = image_convert::identify_ping(&image_convert::ImageResource::Data(
+            fs::read(input_path.as_path()).unwrap(),
+        ))
         .unwrap();
 
-        assert_eq!(2, output.unwrap().get_number_images());
+        assert_eq!(2, identify.number_of_frames);
         assert_eq!(image_convert::InterlaceType::GIF, identify.interlace);
     }
 }

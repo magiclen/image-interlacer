@@ -18,7 +18,7 @@ const APP_ABOUT: &str = concat!(
         "/path/to/image  -o /path/to/image2       # Check /path/to/image and make it interlaced, and save it to /path/to/image2",
         "/path/to/folder -o /path/to/folder2      # Check /path/to/folder and make images inside it interlaced, and save them to /path/to/folder2",
         "/path/to/folder -o /path/to/folder2 -f   # Check /path/to/folder and make images inside it interlaced, and save them to /path/to/folder2 without overwriting checks",
-        "/path/to/folder --allow-gif -r           # Check /path/to/folder and make images inside it including GIF images interlaced and also remain their profiles",
+        "/path/to/folder --allow-gif -r           # Check /path/to/folder and make images inside it including GIF images interlaced and also remain their metadata",
     )
 );
 
@@ -32,24 +32,24 @@ pub struct CLIArgs {
     #[arg(value_hint = clap::ValueHint::AnyPath)]
     #[arg(help = "Assign an image or a directory for image interlacing. It should be a path of \
                   a file or a directory")]
-    pub input_path:     PathBuf,
+    pub input_path:      PathBuf,
     #[arg(short, long, visible_alias = "output")]
     #[arg(value_hint = clap::ValueHint::AnyPath)]
     #[arg(help = "Assign a destination of your generated files. It should be a path of a \
                   directory or a file depending on your input path")]
-    pub output_path:    Option<PathBuf>,
+    pub output_path:     Option<PathBuf>,
     #[arg(short, long)]
     #[arg(help = "Use only one thread")]
-    pub single_thread:  bool,
+    pub single_thread:   bool,
     #[arg(short, long)]
     #[arg(help = "Force to overwrite files")]
-    pub force:          bool,
+    pub force:           bool,
     #[arg(long)]
     #[arg(help = "Allow to do GIF interlacing")]
-    pub allow_gif:      bool,
-    #[arg(short, long)]
-    #[arg(help = "Remain the profiles of all images")]
-    pub remain_profile: bool,
+    pub allow_gif:       bool,
+    #[arg(short, long, visible_alias = "remain-profile")]
+    #[arg(help = "Remain the metadata of all images")]
+    pub remain_metadata: bool,
 }
 
 pub fn get_args() -> CLIArgs {

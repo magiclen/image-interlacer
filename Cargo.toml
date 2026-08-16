@@ -1,6 +1,6 @@
 [package]
 name = "image-interlacer"
-version = "0.2.0"
+version = "0.2.1"
 authors = ["Magic Len <len@magiclen.org>"]
 edition = "2024"
 rust-version = "1.85"
@@ -25,7 +25,7 @@ terminal_size = "0.4"
 
 anyhow = "1"
 
-image-convert = "0.21"
+image-convert = "0.22"
 threadpool = "1"
 
 walkdir = "2"
